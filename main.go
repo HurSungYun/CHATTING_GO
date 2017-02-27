@@ -12,9 +12,14 @@ import (
 )
 
 type User struct {
-	nick   string
-	roomID string
+	nick     string
+	roomID   string
 	lastSent time.Time
+}
+
+type Event struct {
+	nick string
+	ch   chan string
 }
 
 type Message struct {
@@ -32,25 +37,25 @@ type Chatroom struct {
 	title    string
 	members  map[string]chan string
 	msg      []*Message
+	join     chan Event
+	leave    chan string
+	say      chan Message
 }
 
-func (c Chatroom) Say(m Message) {
-	if c.msg == nil {
-		c.msg = make([]*Message, 100)
+func (c Chatroom) run() {
+	for {
+		select {
+		case ev := <-c.join:
+			c.members[ev.nick] = ev.ch
+			c.Broadcast(fmt.Sprintf("%s has joined\n", ev.nick))
+		case nick := <-c.leave:
+			delete(c.members, nick)
+			c.Broadcast(fmt.Sprintf("%s has been leaved\n", nick))
+		case m := <-c.say:
+			c.msg = append(c.msg, &m)
+			c.Broadcast(fmt.Sprintf("message : %s\n", m.String())) //TODO: string 그대로 보내는 것 개선
+		}
 	}
-	c.msg = append(c.msg, &m)
-	c.Broadcast(fmt.Sprintf("message : %s", m.String())) //TODO: string 그대로 보내는 것 개선
-}
-
-func (c Chatroom) Join(nick string, ch chan string) {
-	c.members[nick] = ch
-	c.Broadcast(fmt.Sprintf("%s has joined", nick))
-}
-
-func (c Chatroom) Leave(nick string) {
-	delete(c.members, nick)
-	log.Println("leave")
-	c.Broadcast(fmt.Sprintf("%s has been leaved", nick))
 }
 
 func (c Chatroom) Broadcast(content string) {
@@ -85,14 +90,31 @@ Nickname:<br>
 </html>`
 
 func main() {
-	sampleChat := Chatroom{ID: "asdf", title: "fda", members: make(map[string]chan string)}
+	sampleChat := Chatroom{ID: "asdf", title: "fda", members: make(map[string]chan string),
+					msg: make([]*Message, 100), join: make(chan Event), leave: make(chan string), say: make(chan Message)}
 	chatroomMap["asdf"] = sampleChat
+	go sampleChat.run()
 
 	var srv http.Server
 	srv.Addr = "localhost:7072"
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, loginHTML)
+	})
+
+	http.HandleFunc("/chat/test", func (w http.ResponseWriter, r * http.Request) {
+		roomID := r.URL.Query().Get("roomID")
+		nickname := r.URL.Query().Get("nickname")
+		msg := r.URL.Query().Get("msg")
+
+		chatroom, ok := chatroomMap[roomID]
+
+		if !ok {
+			log.Printf("roomID doesn't exist")
+			return
+		}
+
+		chatroom.say <-Message{nick: nickname, text: msg, timestamp: time.Now()}
 	})
 
 	http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
@@ -129,17 +151,19 @@ func main() {
 					log.Println("msg is ")
 					log.Println(msg)
 				case <-clientGone:
-					chatroom.Leave(nickname)
+					chatroom.leave <- nickname
 					log.Println("Client %v disconnected from the clock", r.RemoteAddr)
 					return
 				}
 			}
 		}(w, r, ch)
 
-		log.Println("a")
-		chatroom.Join(nickname, ch)
-		log.Println("b")
+		chatroom.join <- Event{nick: nickname, ch: ch}
+
 		for {
+			p := make([]byte, 255)
+			log.Println(r.Body.Read(p))
+			log.Println(p)
 			time.Sleep(100 * time.Second)
 		}
 	})
