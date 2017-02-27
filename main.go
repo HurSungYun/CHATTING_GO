@@ -29,7 +29,7 @@ type Message struct {
 }
 
 func (m Message)String() string {
-	return fmt.Sprintf("%s : %s , Sent at %s", m.nick, m.text, m.timestamp.String())
+	return fmt.Sprintf("<%s> : %s , Sent at %s", m.nick, m.text, m.timestamp.String())
 }
 
 type Chatroom struct {
@@ -53,7 +53,7 @@ func (c Chatroom) run() {
 			c.Broadcast(fmt.Sprintf("%s has been leaved\n", nick))
 		case m := <-c.say:
 			c.msg = append(c.msg, &m)
-			c.Broadcast(fmt.Sprintf("message : %s\n", m.String())) //TODO: string 그대로 보내는 것 개선
+			c.Broadcast(fmt.Sprintf("%s\n", m.String())) //TODO: string 그대로 보내는 것 개선
 		}
 	}
 }
@@ -148,7 +148,6 @@ func main() {
 				select {
 				case msg := <-ch:
 					fmt.Fprintf(w, msg)
-					log.Println("msg is ")
 					log.Println(msg)
 				case <-clientGone:
 					chatroom.leave <- nickname
