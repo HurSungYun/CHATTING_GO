@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"io"
+	"bufio"
 	"strings"
 
 	"golang.org/x/net/http2"
@@ -29,7 +30,7 @@ type Message struct {
 }
 
 func (m Message)String() string {
-	return fmt.Sprintf("<%s> : %s , Sent at %s", m.nick, m.text, m.timestamp.String())
+	return fmt.Sprintf("%s <%s> : %s", m.timestamp.String(), m.nick, m.text)
 }
 
 type Chatroom struct {
@@ -50,7 +51,7 @@ func (c Chatroom) run() {
 			c.Broadcast(fmt.Sprintf("%s has joined\n", ev.nick))
 		case nick := <-c.leave:
 			delete(c.members, nick)
-			c.Broadcast(fmt.Sprintf("%s has been leaved\n", nick))
+			c.Broadcast(fmt.Sprintf("%s is disconnected\n", nick))
 		case m := <-c.say:
 			c.msg = append(c.msg, &m)
 			c.Broadcast(fmt.Sprintf("%s\n", m.String())) //TODO: string 그대로 보내는 것 개선
@@ -59,8 +60,7 @@ func (c Chatroom) run() {
 }
 
 func (c Chatroom) Broadcast(content string) {
-	for key, ch := range c.members {
-		log.Println(key)
+	for _, ch := range c.members {
 		ch <- content
 	}
 }
@@ -105,6 +105,10 @@ func main() {
 	http.HandleFunc("/chat/test", func (w http.ResponseWriter, r * http.Request) {
 		roomID := r.URL.Query().Get("roomID")
 		nickname := r.URL.Query().Get("nickname")
+		userMap[nickname] = User{}
+		if _, ok := userMap[nickname]; ok {
+			log.Println(ok)
+		}
 		msg := r.URL.Query().Get("msg")
 
 		chatroom, ok := chatroomMap[roomID]
@@ -124,10 +128,12 @@ func main() {
 		log.Println(header)
 		log.Println(roomID)
 		log.Println(nickname)
+		userMap[nickname] = User{}
+		if _, ok := userMap[nickname]; ok {
+			log.Println(ok)
+		}
 
 		chatroom, ok := chatroomMap[roomID]
-
-		log.Println(ok)
 
 		if !ok {
 			log.Printf("roomID doesn't exist") //TODO: create chatroom
@@ -143,7 +149,6 @@ func main() {
 
 		go func(w http.ResponseWriter, r *http.Request, ch chan string) {
 			for {
-				log.Println("in")
 				w.(http.Flusher).Flush()
 				select {
 				case msg := <-ch:
@@ -160,9 +165,14 @@ func main() {
 		chatroom.join <- Event{nick: nickname, ch: ch}
 
 		for {
-			p := make([]byte, 255)
-			log.Println(r.Body.Read(p))
-			log.Println(p)
+			bd := bufio.NewReader(r.Body)
+			_ = bd
+/*			line, err := bd.ReadString('\n')
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			log.Println(line)*/
 			time.Sleep(100 * time.Second)
 		}
 	})
