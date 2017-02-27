@@ -5,7 +5,6 @@ import (
 	"time"
 	"log"
 	"net/http"
-	"regexp"
 	"io"
 	"strings"
 
@@ -19,18 +18,46 @@ type User struct {
 }
 
 type Message struct {
-	roomID    string
 	nick      string
 	text      string
 	timestamp time.Time
 }
 
+func (m Message)String() string {
+	return fmt.Sprintf("%s : %s , Sent at %s", m.nick, m.text, m.timestamp.String())
+}
+
 type Chatroom struct {
 	ID       string
 	title    string
-	members  []*User
+	members  map[string]chan string
 	msg      []*Message
-	numOfMsg int
+}
+
+func (c Chatroom) Say(m Message) {
+	if c.msg == nil {
+		c.msg = make([]*Message, 100)
+	}
+	c.msg = append(c.msg, &m)
+	c.Broadcast(fmt.Sprintf("message : %s", m.String())) //TODO: string 그대로 보내는 것 개선
+}
+
+func (c Chatroom) Join(nick string, ch chan string) {
+	c.members[nick] = ch
+	c.Broadcast(fmt.Sprintf("%s has joined", nick))
+}
+
+func (c Chatroom) Leave(nick string) {
+	delete(c.members, nick)
+	log.Println("leave")
+	c.Broadcast(fmt.Sprintf("%s has been leaved", nick))
+}
+
+func (c Chatroom) Broadcast(content string) {
+	for key, ch := range c.members {
+		log.Println(key)
+		ch <- content
+	}
 }
 
 var (
@@ -43,25 +70,6 @@ func addUser(nick string) User {
 	userMap[nick] = user
 	return user
 }
-
-func (c Chatroom)addMessage(m Message) {
-	if c.msg == nil {
-		c.msg = make([]*Message, 100)
-	}
-	c.msg = append(c.msg, &m)
-}
-
-const mainJS = `console.log("hello world");`
-
-const indexHTML = `<html>
-<head>
-	<title>Hello</title>
-		<script src="/main.js"></script>
-		</head>
-		<body>
-		</body>
-		</html>
-`
 
 const loginHTML = `<html>
 <head><title>Welcome to CHATTING GO</title>
@@ -76,49 +84,15 @@ Nickname:<br>
 </body>
 </html>`
 
-var rString = regexp.MustCompile(`.+`)
-
 func main() {
-	sampleChat := Chatroom{ID: "asdf", title: "fda"}
+	sampleChat := Chatroom{ID: "asdf", title: "fda", members: make(map[string]chan string)}
 	chatroomMap["asdf"] = sampleChat
 
 	var srv http.Server
 	srv.Addr = "localhost:7072"
 
-	http.HandleFunc("/main.js", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, mainJS)
-	})
-	http.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-
-		pusher, ok := w.(http.Pusher)
-		if ok { // Push is supported. Try pushing rather than waiting for the browser.
-			if err := pusher.Push("/main.js", nil); err != nil {
-				log.Printf("Failed to push: %v", err)
-			}
-		}
-		fmt.Fprintf(w, indexHTML)
-	})
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, loginHTML)
-	})
-
-	http.HandleFunc("/chat/say", func(w http.ResponseWriter, r *http.Request) {
-		roomID := r.URL.Query().Get("roomID")
-		nickname := r.URL.Query().Get("nickname")
-		text := r.URL.Query().Get("text")
-
-		chatroom, ok := chatroomMap[roomID]
-
-		if !ok {
-			log.Printf("roomID doesn't exist")
-			return
-		}
-
-		message := Message{roomID,nickname,text,time.Now()}
-
-		chatroom.addMessage(message)
-
 	})
 
 	http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
@@ -129,22 +103,44 @@ func main() {
 		log.Println(roomID)
 		log.Println(nickname)
 
+		chatroom, ok := chatroomMap[roomID]
+
+		log.Println(ok)
+
+		if !ok {
+			log.Printf("roomID doesn't exist") //TODO: create chatroom
+			return
+		}
+
 		clientGone := w.(http.CloseNotifier).CloseNotify()
 		w.Header().Set("Content-Type", "text/plain")
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
 		fmt.Fprintf(w, "# ~1KB of junk to force browsers to start rendering immediately: \n")
 		io.WriteString(w, strings.Repeat("# xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n", 13))
-		for {
-			fmt.Fprintf(w, "%v\n", time.Now())
-			w.(http.Flusher).Flush()
-			select {
-			case <-ticker.C:
-				log.Println("tick")
-			case <-clientGone:
-				log.Println("Client %v disconnected from the clock", r.RemoteAddr)
-				return
+
+		ch := make(chan string, 100)
+
+		go func(w http.ResponseWriter, r *http.Request, ch chan string) {
+			for {
+				log.Println("in")
+				w.(http.Flusher).Flush()
+				select {
+				case msg := <-ch:
+					fmt.Fprintf(w, msg)
+					log.Println("msg is ")
+					log.Println(msg)
+				case <-clientGone:
+					chatroom.Leave(nickname)
+					log.Println("Client %v disconnected from the clock", r.RemoteAddr)
+					return
+				}
 			}
+		}(w, r, ch)
+
+		log.Println("a")
+		chatroom.Join(nickname, ch)
+		log.Println("b")
+		for {
+			time.Sleep(100 * time.Second)
 		}
 	})
 
